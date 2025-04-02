@@ -1,0 +1,700 @@
+```{r}
+library(dplyr)
+library(tidyr)
+library(readr)
+library(glue)
+library(ggplot2)
+library(scales)
+library(stringr)
+```
+
+
+# DPLYR and GGPLOT tutorial code
+
+```{r}
+#install.packages("dplyr")
+#install.packages("ggplot2")
+#install.packages("gapminder")
+
+library(dplyr)
+library(ggplot2)
+library(gapminder)
+
+# Preview the data
+head(gapminder)
+
+# Check structure
+str(gapminder)
+```
+
+
+```{r}
+# Filter for Slovenia only
+gapminder  %>%  
+  filter(country == "Slovenia")
+```
+
+```{r}
+# Select just country, year, and life expectancy
+gapminder %>% 
+  select(country, year, lifeExp)
+```
+
+```{r}
+# Add column GDP in billions
+gapminder %>%
+  mutate(gdp_billion = gdpPercap * pop / 1e9)
+
+```
+
+```{r}
+# Average life expectancy per continent
+gapminder %>%
+  group_by(continent) %>%
+  summarise(avg_lifeExp = mean(lifeExp))
+
+```
+
+```{r}
+gapminder %>%
+  filter(country == "Slovenia") %>%
+  ggplot(aes(x = year, y = lifeExp)) +
+  geom_line(color = "blue", size = 1.2) +
+  labs(title = "Life Expectancy in Slovenia Over Time",
+       x = "Year",
+       y = "Life Expectancy") +
+  theme_bw()
+
+
+ggplot(gapminder, aes(x = gdpPercap, y = lifeExp, color = continent)) +
+  geom_point() +
+  scale_x_log10() + # log scale to make it more readable
+  labs(title = "Life Expectancy vs GDP per Capita",
+       x = "GDP per Capita (log scale)",
+       y = "Life Expectancy") +
+  theme_bw()
+
+
+```
+
+
+
+
+
+# App1 vs App2 retention data 
+```{r}
+# import the data
+retention_df <- read_csv("analysis_retention.csv")
+
+retention_plot_data <- retention_df %>% 
+  mutate(daySinceInstall = as.numeric(activeDate - installDate)) %>% 
+  group_by(app, installDate, daySinceInstall) %>% 
+  summarise(activeUsers = n_distinct(user_label)) %>% 
+  ungroup() %>%
+  group_by(app, installDate) %>% 
+  mutate(cohortUsers = max(activeUsers)) %>% 
+  ungroup() %>%
+  filter(daySinceInstall >= 0)   # Keep only valid daySinceInstall values
+
+```
+
+```{r}
+retention_plot_data %>% 
+  filter(daySinceInstall %in% c(1,3,7)) %>% 
+  ggplot(aes(installDate, activeUsers/cohortUsers, color = app)) +
+    geom_line() +
+    geom_point() +
+    facet_grid(daySinceInstall~.) +
+    scale_y_continuous(labels = scales::percent) +
+    labs(title = "Retention for two apps", x = "install date", y = "% active users") +
+    expand_limits(y = 0) +
+    theme_bw()
+```
+
+```{r}
+retention_plot_per_app <- retention_plot_data %>% 
+  group_by(app, daySinceInstall) %>% 
+  summarise(cohortUsers = sum(cohortUsers), activeUsers = sum(activeUsers)) %>% 
+  ungroup() %>%
+  mutate(retention_rate = activeUsers/cohortUsers)
+  
+retention_plot_per_app %>% 
+  ggplot(aes(daySinceInstall, retention_rate, color = app)) +
+    geom_line() +
+    geom_point() +
+    scale_y_continuous(labels = scales::percent) +
+    labs(title = "Retention for two apps", x = "install date", y = "% active users") +
+    expand_limits(y = 0) +
+    theme_bw()
+```
+
+```{r}
+retention_plot_relative <- retention_plot_data %>% 
+  group_by(app, daySinceInstall) %>% 
+  summarise(cohortUsers = sum(cohortUsers), activeUsers = sum(activeUsers)) %>% 
+  ungroup() %>%
+  mutate(retention_rate = activeUsers/cohortUsers)
+
+retention_app_1 <- retention_plot_relative %>% 
+  filter(app == "app 1") %>% 
+  rename(retention_rate_app_1 = retention_rate) %>% 
+  select(retention_rate_app_1, daySinceInstall)
+
+retention_plot_relative %>% 
+  merge(retention_app_1, by = "daySinceInstall") %>% 
+ggplot(aes(daySinceInstall, retention_rate/retention_rate_app_1, color = app)) +
+    geom_line() +
+    geom_point() +
+    scale_y_continuous(labels = scales::percent) +
+    labs(title = "Retention for two apps", x = "install date", y = "% active users") +
+    expand_limits(y = 0) +
+    theme_bw()
+```
+
+
+
+# MTA vs MTT data - feature usages
+```{r}
+# import data
+features_mta <-  read_csv("features_mta.csv")
+features_mtt <-  read_csv("features_mtt.csv")
+day_users_mta <- read_csv("day_users_mta.csv")
+day_users_mtt <- read_csv("day_users_mtt.csv")
+```
+
+## minigame-play
+```{r}
+# Filter for "minigame_play" feature and assign app labels
+minigame_mta <- features_mta %>%
+  filter(feature == "minigame_play") %>%
+  mutate(app = "mta")
+
+minigame_mtt <- features_mtt %>%
+  filter(feature == "minigame_play") %>%
+  mutate(app = "mtt")
+
+# Combine both datasets
+minigame_combined <- bind_rows(minigame_mta, minigame_mtt)
+
+# Prepare daily user data with app labels
+day_users <- bind_rows(
+  day_users_mta,
+  day_users_mtt
+)
+
+# Merge event data with daily user data
+minigame_merged <- minigame_combined %>%
+  left_join(day_users, by = c("app","daySinceInstall")) %>%
+  mutate(avgCAU = actions / cohortUsers)  # Calculate average usage per CAU
+
+# Create a well-presented ggplot visualization
+ggplot(minigame_merged, aes(x = daySinceInstall, y = avgCAU, color = app)) +
+  geom_line(size = 1.2) +  # Thicker line for better visibility
+  scale_y_continuous(limits = c(0, NA), expand = expansion(mult = 0.05)) +
+  facet_wrap(~feature, scales = "free_y") +  # Separate plots for each event type
+  labs(
+    title = "Feature Usage per Cohort Active User (CAU)",
+    subtitle = "Comparison of 'minigame_play' events across MTA and MTT",
+    x = "Days Since Install (DSI)",
+    y = "Average Feature Usage per CAU",
+    color = "Application"
+  ) +
+  theme_bw()
+
+```
+
+
+## For multiple features
+```{r}
+filtered_features_mta <- features_mta %>% 
+  filter(!is.na(feature)) %>%
+  mutate(app = "mta")
+
+filtered_features_mtt <- features_mtt %>% 
+  filter(!is.na(feature)) %>%
+  mutate(app = "mtt")
+
+features_df <- filtered_features_mta %>% 
+  rbind(filtered_features_mtt) %>% 
+  left_join(day_users) %>% 
+  mutate(group_events = str_extract(feature, "[a-z]+")) %>% 
+  mutate(avgCAU = actions/cohortUsers) %>% 
+  split(.$group_events, drop = T)
+
+features_df %>% 
+    purrr::walk(function(data) {
+    fplot <- ggplot(data, aes(x = daySinceInstall,  y = avgCAU, color = app)) + 
+        geom_line() +
+        scale_y_continuous(limits = c(0, NA)) +
+        facet_wrap(feature~.)+
+        labs(title = paste0("Number of feature usage per CAU: ", data$group_events[1]), x = "dsi", y = "Avg per CAU", color = "Event") +
+      theme_bw()
+    plot(fplot)
+})
+
+dataframe_features_CAU <- filtered_features_mta %>% 
+  rbind(filtered_features_mtt) %>% 
+  left_join(day_users) %>% 
+  mutate(group_events = str_extract(feature, "[a-z]+")) %>% 
+  mutate(cauPerc = users/cohortUsers) %>%
+  split(.$group_events, drop = T)
+  
+dataframe_features_CAU %>% 
+    purrr::walk(function(data) {
+    fplot <- ggplot(data, aes(x = daySinceInstall,  y = cauPerc, color = app)) + 
+        geom_line() +
+        scale_y_continuous(limits = c(0, 1), labels = scales::percent) +
+        facet_wrap(feature~.)+
+        labs(title = paste0("Feature usage: ", data$group_events[1]), x = "dsi", y = "% CAU", color = "Event") +
+      theme_bw()
+     plot(fplot)
+  })
+```
+
+
+
+
+# AB TEST RESULTS
+## Import data
+```{r}
+library(dplyr)
+library(ggplot2)
+library(readr)
+
+ab_test_minigames_df <- read_csv("ab_test_percent_users_minigames.csv") %>% 
+  mutate(groupDescription = case_when( # add a description for each group for easier understanding
+    testGroup == "A" ~ "A: control group",
+    testGroup == "B" ~ "B: 8 most popular minigames",
+    testGroup == "C" ~ "C: 8 least popular minigames",
+    testGroup == "D" ~ "D: 8 most similar to MTA",
+    TRUE ~ "Unknown"))
+
+ab_test_retention_df <- read_csv("ab_test_retention.csv") %>% 
+  mutate(groupDescription = case_when(
+    testGroup == "A" ~ "A: control group",
+    testGroup == "B" ~ "B: 8 most popular minigames",
+    testGroup == "C" ~ "C: 8 least popular minigames",
+    testGroup == "D" ~ "D: 8 most similar to MTA",
+    TRUE ~ "Unknown"))
+```
+
+```{r}
+ab_test_minigames_df
+```
+
+
+## AB test retention
+```{r fig.height=8, fig.width=20}
+ab_test_retention_df %>% 
+  group_by(testGroup) %>% 
+  mutate(testUsers = max(ifelse(daySinceInstall == 0, users, 0))) %>% # calculate number of users per group
+  ungroup() %>%
+  mutate(retention = users/testUsers) %>% 
+  
+  ggplot(aes(x = daySinceInstall, y = retention, color = groupDescription)) +
+    geom_line() +
+    geom_point() +
+    theme_bw() + 
+    scale_y_continuous(labels = scales::percent) + # transforms 0.1 to 10%
+    scale_x_continuous(minor_breaks = seq(0 , 15, 1), breaks = seq(0, 15, 1)) + # add vertical lines for each day
+    scale_color_discrete(name = "Groups") + # rename the legend title
+    theme(text = element_text(size = 20)) +
+    expand_limits(y = 0) + # includes y = 0
+    labs(title = "Retention")
+```
+
+## AB test zoomed in retention
+```{r fig.height=8, fig.width=20}
+ab_test_retention_df %>% 
+  group_by(testGroup) %>% 
+  mutate(testUsers = max(ifelse(daySinceInstall == 0, users, 0))) %>% 
+  ungroup() %>%
+  mutate(retention = users/testUsers) %>% 
+  
+  ggplot(aes(x = daySinceInstall, y = retention, color = groupDescription)) +
+    geom_line() +
+    geom_point() +
+    theme_bw() + 
+    scale_y_continuous(labels = scales::percent) +
+    scale_x_continuous(minor_breaks = seq(0 , 15, 1), breaks = seq(0, 15, 1)) +
+    scale_color_discrete(name = "Groups") +
+    coord_cartesian(y = c(0.1, 0.3)) +
+    theme(text = element_text(size = 20)) +
+    labs(title = "Zoomed-in retention")
+```
+
+## AB test relative retention
+```{r fig.height=8, fig.width=20}
+calculated_retention <- ab_test_retention_df %>% 
+  group_by(testGroup, groupDescription) %>% 
+  mutate(testUsers = max(ifelse(daySinceInstall == 0, users, 0))) %>% 
+  ungroup() %>%
+  mutate(retention = users/testUsers) %>% 
+  select(daySinceInstall, testGroup, retention, groupDescription)
+
+group_a <- calculated_retention %>% 
+  filter(testGroup == "A") %>% 
+  rename(controlGroup = testGroup, controlRetention = retention)
+
+calculated_retention %>% 
+  merge(group_a, by = "daySinceInstall") %>% 
+  mutate(relativeDifference = retention / controlRetention - 1) %>% 
+  
+  ggplot(aes(x = daySinceInstall, y = relativeDifference, color = groupDescription.x)) +
+    geom_line() +
+    geom_point() +
+    theme_bw() + 
+    scale_y_continuous(labels = scales::percent) +
+    scale_x_continuous(minor_breaks = seq(0 , 15, 1), breaks = seq(0, 15, 1)) +
+    scale_color_discrete(name = "Groups") +
+    expand_limits(y = 0) +
+    theme(text = element_text(size = 20)) +
+    labs(title= "Relative difference in retention between test groups and control group", y = "% difference from control")
+```
+
+
+## Percent of users playing minigames - bar
+```{r fig.width=15, fig.height=8}
+ab_test_minigames_df %>% 
+  ggplot(aes(x = minigame, y = percentOfUsers, fill = minigame)) +
+    geom_bar(stat = "identity", position = position_dodge()) +
+    facet_wrap(~groupDescription, nrow = 2, ) +
+    labs(
+      title = "Percent of users playing minigames",
+      x = "",
+      y = "% users",
+    ) +
+    theme_bw() +
+    theme(text = element_text(size = 20), axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    theme(legend.position = "none")
+```
+
+```{r fig.width=15, fig.height=8}
+ab_test_minigames_df %>% 
+  filter(percentOfUsers > 5) %>%
+  ggplot(aes(x = minigame, y = percentOfUsers, fill = minigame)) +
+    geom_bar(stat = "identity", position = position_dodge()) +
+    facet_wrap(~groupDescription, nrow = 2, ) +
+    labs(
+      title = "Percent of users playing minigames",
+      x = "",
+      y = "% users",
+    ) +
+    theme_bw() +
+    theme(text = element_text(size = 20), axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    theme(legend.position = "none")
+```
+
+## Percent of users playing minigames - scatter
+```{r fig.width=15, fig.height=8}
+ab_test_minigames_df %>% 
+  filter(percentOfUsers > 5) %>% 
+  ggplot(aes(x = "games", y = percentOfUsers, color = minigame)) +
+    geom_text(aes(label = minigame), hjust = 0.5, vjust = 1.5, position = position_jitter(width = 0.5, height = 0), size = 7) +
+    facet_wrap(~groupDescription, nrow = 1) +
+    labs(
+      title = "Percent of users playing minigames",
+      x = "",
+      y = "% users",
+    ) +
+    expand_limits(y = 0) +
+    theme(text = element_text(size = 30), strip.text = element_text(size = 20)) +
+    guides(color = "none") +
+    theme_bw() 
+```
+
+## Selected minigames
+```{r}
+group_a_data <- ab_test_minigames_df %>% 
+  filter(testGroup == "A")
+
+group_b_minigames <- ab_test_minigames_df %>% 
+  filter(percentOfUsers > 5, testGroup == "B") %>%
+  distinct(minigame)
+
+group_b_data <- group_a_data %>% 
+  merge(group_b_minigames) %>% 
+  mutate(testGroup = "B")
+  
+group_c_minigames <- ab_test_minigames_df %>% 
+  filter(percentOfUsers > 5, testGroup == "C") %>%
+  distinct(minigame)
+
+group_c_data <- group_a_data %>% 
+  merge(group_c_minigames) %>% 
+  mutate(testGroup = "C")
+
+group_d_minigames <- ab_test_minigames_df %>% 
+  filter(percentOfUsers > 5, testGroup == "D") %>%
+  distinct(minigame)
+
+group_d_data <- group_a_data %>% 
+  merge(group_d_minigames) %>% 
+  mutate(testGroup = "D")
+
+selected_games_df <- group_a_data %>% rbind(group_b_data, group_c_data, group_d_data)
+
+selected_games_df
+```
+
+```{r fig.width=15, fig.height=8}
+selected_games_df %>% 
+  ggplot(aes(x = "games", y = percentOfUsers, color = minigame)) +
+    geom_text(aes(label = minigame), hjust = 0.5, vjust = 1.5,position = position_jitter(width = 0.5, height = 0), size = 7) +
+    facet_wrap(~testGroup, nrow = 1) +
+    labs(
+      title = "Percent of users playing minigames",
+      x = "",
+      y = "% users",
+    ) +
+    scale_y_continuous(limits = c(0, NA)) +
+    theme(text = element_text(size = 30), strip.text = element_text(size = 20)) +
+    guides(color = "none") +
+    theme_bw() 
+```
+
+## Average number of minigames
+```{r fig.width=15, fig.height=9}
+ab_test_minigames_df %>% 
+  filter(percentOfUsers > 5) %>% 
+  ggplot(aes(x = minigame, y = minigamePlaysPerUser, fill = minigame)) +
+    geom_bar(stat = "identity") +
+    facet_wrap(~groupDescription, nrow = 2, ) +
+    labs(
+      title = "Average number of plays per user per minigame",
+      x = "",
+      y = "% users",
+    ) +
+    theme_bw() +
+    theme(text = element_text(size = 20), axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1)) +
+    theme(legend.position = "none")
+```
+
+
+
+
+
+
+
+
+# APPENDIX
+
+## DAU
+```{r}
+# Simulating example data with a drop from Jan 15 to Jan 22
+set.seed(123)
+df <- data.frame(
+  date = seq(as.Date("2024-01-01"), by = "day", length.out = 30),
+  dau = 500 + (1:30 * 10) + sample(0:50, 30, replace = TRUE) 
+)
+
+# Introduce a drop from Jan 15 to Jan 22
+df <- df %>%
+  mutate(dau = ifelse(date >= as.Date("2024-01-15") & date <= as.Date("2024-01-22"), 
+                      dau - sample(100:200, 1), dau))
+
+# Plot using ggplot
+ggplot(df, aes(x = date, y = dau)) +
+  geom_line(color = "blue", size = 1) + 
+  geom_point(aes(color = ifelse(date >= as.Date("2024-01-15") & date <= as.Date("2024-01-22"), 
+                                "Drop", "Normal")), size = 2) + 
+  scale_color_manual(values = c("Drop" = "Black", "Normal" = "black")) +
+  labs(title = "Daily Active Users (DAU) ",
+       x = "Date",
+       y = "Active Users",
+       color = "DAU Status") +
+  theme_bw() +
+  scale_y_continuous(limits = c(0,NA))+
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "none"
+  )
+```
+
+## New installs
+```{r}
+# Simulate example data: 30 days of new installs
+set.seed(123)
+df <- data.frame(
+  date = seq(as.Date("2024-01-01"), by = "day", length.out = 30),
+  installs = round(runif(30, min = 50, max = 200)) # Random normal installs
+)
+
+# Introduce an exponential spike on January 15 that decays exponentially until Jan 20
+spike_day <- as.Date("2024-01-15")
+decay_days <- 5  # Duration of exponential drop (Jan 15 - Jan 20)
+spike_value <- 500  # Peak installs on Jan 15
+decay_rate <- 0.2  # Controls how fast it drops
+
+df <- df %>%
+  mutate(installs = ifelse(date == spike_day, spike_value, installs), # Spike on Jan 15
+         installs = ifelse(date > spike_day & date <= spike_day + decay_days, 
+                           spike_value * exp(-decay_rate * as.numeric(date - spike_day)), 
+                           installs)) # Exponential drop
+
+# Plot using ggplot2
+ggplot(df, aes(x = date, y = installs)) +
+  geom_line(color = "blue", size = 1) + 
+  geom_point(aes(color = ifelse(date >= spike_day & date <= spike_day + decay_days, 
+                                "Spike & Drop", "Normal")), size = 2) + 
+  scale_color_manual(values = c("Spike & Drop" = "black", "Normal" = "black"),guide = "none") +
+  labs(title = "New Installs with Exponential Spike and Drop",
+       x = "Date",
+       y = "New Installs",
+       color = "Install Pattern") +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1),
+    legend.position = "none"
+  )+
+  scale_y_continuous(limits = c(0,NA))
+```
+
+## Daily playtime users
+```{r}
+# Simulate daily playtime per user (in minutes)
+set.seed(123)
+df <- data.frame(
+  date = seq(as.Date("2024-01-01"), by = "day", length.out = 30),
+  playtime = round(runif(30, min = 30, max = 90)) # Normal daily playtime (random values)
+)
+
+# Introduce a small increase on January 15 that remains constant afterward
+increase_day <- as.Date("2024-01-15")
+increase_value <- 50  # Small increase in minutes
+
+df <- df %>%
+  mutate(playtime = ifelse(date >= increase_day, playtime + increase_value, playtime)) 
+
+# Plot using ggplot2
+ggplot(df, aes(x = date, y = playtime)) +
+  geom_line(color = "blue", size = 1) + 
+  geom_point(color = "black", size = 2) + 
+  labs(title = "Daily Playtime per User with a Small Increase",
+       x = "Date",
+       y = "Playtime (minutes)") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  scale_y_continuous(limits = c(0,NA))
+
+```
+
+## Daily sessions per user
+```{r}
+# Simulate daily sessions per user
+set.seed(123)
+df <- data.frame(
+  date = seq(as.Date("2024-01-01"), by = "day", length.out = 30),
+  sessions = round(runif(30, min = 2, max = 6)) # Random sessions per user
+)
+
+# Introduce a small increase on January 15 that remains constant afterward
+increase_day <- as.Date("2024-01-15")
+increase_value <- 1  # Small increase in sessions per user
+
+df <- df %>%
+  mutate(sessions = ifelse(date >= increase_day, sessions + increase_value, sessions)) 
+
+# Plot using ggplot2
+ggplot(df, aes(x = date, y = sessions)) +
+  geom_line(color = "blue", size = 1) + 
+  geom_point(color = "black", size = 2) + 
+  labs(title = "Daily Sessions Per User with a Small Increase",
+       x = "Date",
+       y = "Sessions per User") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+  scale_y_continuous(limits = c(0,NA))
+```
+
+## Average Session Duration
+```{r}
+# Set seed for reproducibility
+set.seed(123)
+
+# Generate random session durations 
+df <- data.frame(
+  date = seq(as.Date("2024-01-01"), by = "day", length.out = 30),
+  session_duration = round(runif(30, min = 5, max = 15) + rnorm(30, mean = 0, sd = 2), 1) # Adding more randomness
+)
+
+# Ensure no negative values
+df <- df %>%
+  mutate(session_duration = ifelse(session_duration < 2, 2, session_duration)) # Set a lower bound
+
+# Plot using ggplot2
+ggplot(df, aes(x = date, y = session_duration)) +
+  geom_line(color = "blue", size = 1) + 
+  geom_point(color = "black", size = 2) + 
+  labs(title = "Average Session Duration Per User (Randomized)",
+       x = "Date",
+       y = "Session Duration (minutes)") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))+
+    scale_y_continuous(limits = c(0,NA))
+
+
+
+```
+
+## Revenue
+```{r}
+# Simulate daily revenue per user 
+set.seed(123)
+df <- data.frame(
+  date = seq(as.Date("2024-01-01"), by = "day", length.out = 30),
+  revenue = round(runif(30, min = 0.15, max = 0.3), 3)  # Round to 3 decimal places
+)
+
+# Introduce a small increase on January 15 that remains constant afterward
+increase_day <- as.Date("2024-01-15")
+increase_value <- 0.5  # Small increase in revenue
+
+df <- df %>%
+  mutate(revenue = ifelse(date >= increase_day, revenue + increase_value, revenue)) 
+
+# Plot using ggplot2
+ggplot(df, aes(x = date, y = revenue)) +
+  geom_line(color = "blue", size = 1) + 
+  geom_point(color = "black", size = 2) + 
+  labs(title = "Revenue per Daily active User",
+       x = "Date",
+       y = "Revenue (USD)") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  scale_y_continuous(limits = c(0, NA))
+
+```
+
+## Retention
+```{r}
+# Set seed for reproducibility
+set.seed(123)
+
+# Simulate improving retention rates over 30 days
+df <- data.frame(
+  date = seq(as.Date("2024-01-01"), by = "day", length.out = 30),
+  D1 = round(seq(40, 45, length.out = 30) + rnorm(30, mean = 0, sd = 1), 1),  # Gradual increase for D1 retention
+  D7 = round(seq(15, 20, length.out = 30) + rnorm(30, mean = 0, sd = 0.5), 1),  # Slight increase for D7 retention
+  D30 = round(seq(5, 8, length.out = 30) + rnorm(30, mean = 0, sd = 0.3), 1)   # Slow but steady growth for D30 retention
+)
+
+# Reshape data for ggplot
+df_long <- df %>%
+  pivot_longer(cols = c(D1, D7, D30), names_to = "Retention_Day", values_to = "Retention_Rate")
+
+# Plot using ggplot2
+ggplot(df_long, aes(x = date, y = Retention_Rate, color = Retention_Day)) +
+  geom_line(size = 1) + 
+  geom_point(size = 2) + 
+  scale_color_manual(values = c("D1" = "blue", "D7" = "red", "D30" = "green")) +
+  labs(title = "User Retention Over Time (Improving Trend in D1, D7, D30)",
+       x = "Date",
+       y = "Retention Rate (%)",
+       color = "Retention Day") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+```
+
+
